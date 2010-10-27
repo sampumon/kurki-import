@@ -1,0 +1,35 @@
+HOWTO?
+
+1) Organize your Google Doc as follows. Creating extra sheets is good. Nothing extra (except comments)!
+
+# assignment points (sheet 1)
+012345678	1	0	3	4
+012345679	0	2	3	0
+...
+
+# exam points (sheet 2)
+012345678	4	8	12
+012345679	1	0	1
+...
+
+2) Export (download as) "text", you should now have:
+
+my-course-assignments.tsv
+my-course-exams.tsv
+
+3) Set course settings in KURKI! Otherwise things will silently fail. You'll need a correct number of assignments, exams and whatnot, with the correct point scale.
+
+4) Find correct course and copy the course id:
+
+kurki-import -n
+
+5) Import points:
+
+kurki-import -c 512345.2010.S.K.1 -p 0 my-course-assignments.tsv
+kurki-import -c 512345.2010.S.K.1 -p 2 my-course-exams.tsv
+
+7) Check KURKI if everything is ok!
+
+Notice that having point 0 and (empty) is different for KURKI
+(and kurki-import), as 0 usually triggers "attended the course"
+status, and cause a FAIL for student! Beware!

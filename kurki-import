@@ -1,0 +1,330 @@
+#!/bin/bash
+
+# Imports course points/gradings/whatnot into KURKI. Run without parameters for help.
+# Do check the results for sanity! Thanks.
+# Samuli / 2008 syksy – 2010 syksy
+
+# There are some TODOs left, so be careful :)
+
+# Version history goodness!
+# 16.2.2009 / copy-paste from 16.10.2008; that's FOUR months ago! +helpme function
+# 14.3.2009 / refactor into functions, rrrrrrraaaaaaaaaaaa! +command line parameters
+# 22.3.2009 / add people, check people and stuff! only small sub-checks now missing!
+# 23.3.2009 / now also dos-esque \r\n newlines are mostly recognized
+# 17.11.2009 / course listing if no -c course given
+# 25.10.2010 / added missing ptype for kurki_prepare_entry
+
+# 0 assignment/laskuharjoituspisteet
+# 1 project/harjoitustyö
+# 2 exam/koepisteet
+# 3 grade/arvosana
+# 4 ects/opintopisteet
+# 5 opintoviikot	
+
+# show HELP and exit
+helpme () {
+cat <<TAC
+Usage: kurki-import -aknv [-c course] [-p ptype] [-u user] INPUT
+
+	-a add missing people to KURKI
+	-k skip Univ_Helsinki_CS_CA.crt verification
+	-n post no points, but do the following:
+		1) assert input (if given)
+		2) list courses (if -c not given)
+		3) add missing people to KURKI (if -c and -a given)
+	-v verbose==debug (TODO)
+	-c course in KURKI; use -n to list courses
+	-p point type: 0 assignment/laskari (default), 1 project/ht,
+		2 exam/koe, 3 grade/arvosana, 4 ects/op
+	-u login to KURKI as user; otherwise as current login user
+	
+	INPUT file format as follows, fields separated by TABs:
+	studentn	p1	p2	p3	...
+	...
+
+	example with {three assignments} x {two students}:
+	011212122	8	5	3
+	012112121	10	5	4
+TAC
+exit 1
+}
+
+# parse command line arguments and set variables accordingly
+parse_args () {
+
+	# default settings for CURL & KURKI
+	meter=-s # silent curl
+	# NOTE: field separator is tab, that's just so much safer for everyone ^.^
+	# WARNING: need to add this as awk parameter whenever processing fields!
+	awktab='-F \t -v OFS=\t'
+	tmp=/tmp/kurki-import/
+	site=https://ilmo.cs.helsinki.fi/kurki/servlet/index
+	user=$USER
+	# TODO: no default course, just give error
+	# course=581324.2009.K.L.1 # Tietokone työvälineenä, koe 23.01.09 [K09] == TEMP PLAYGROUND :)
+	ptype=0 # TODO: might 0 be ok default?
+	
+	# THEN, process any command line parameters
+
+	while getopts "aknvc:p:u:" kurki
+	do
+		case $kurki in
+			a) do_add=1;;
+			k) cert="-k";; # skip curl certificate verification
+			n) do_nothing=1;;
+			v) do_verbose=1;;
+			c) course=$OPTARG;;
+			p) ptype=$OPTARG;;
+			u) user=$OPTARG;;
+		esac
+	done
+	
+	# make first non-option argument as $1
+	shift $((OPTIND-1))
+	input=$1 # input file as given as the last command line parameter
+}
+
+# parse_input "raw input" "output file"
+# : parse and sort input file
+parse_input () {
+	# skip white-space-only and #comment lines
+	# TODO: does it hande _all_ cases? AT LEAST DOS \r!
+	# TODO2: needs dos2unix though! otherwise last point field is screwed
+	# (could be also grep, but did with awk first :o)
+	# NOTE: we're not bothering numeric sort; make sure student numbers are of same length!
+	awk '!/^[ \t#\r]/ { print }' $1 | sort > $2
+
+	# DETECT {grade count} x {people count} from parsed INPUT
+	# NOTE: empty fields don't count unless field separator is \t, and it sure is!
+	# NOTE2: need to be out of subshell, not posix-compatible :o
+	# TODO: skip empty fields at the end?
+	read offeringscount peoplecount < <(awk $awktab '{ ppl++; if (NF>grades) grades=NF } END { print grades-1, ppl }' $2)
+}
+
+# interactive password LOGIN into KURKI
+# ALSO loads our course into KURKI state!
+kurki_login () {
+	# read passwd interactively (using previous cookie won't work with http authentication)
+	# WARNING: is it safe to have the password hangin' around as shell variable AND as curl parameters?
+	# TODO: getopts seems to randomly break -s, don't know what to do :/ :/
+	read -sp "$user@$site password:" pass && echo
+
+	# login and save fresh cookies (resetting any previous KURKI state)
+	# and while at it, select the right course (but don't prepare for grade entry)
+	# TODO: maybe shouldn't yet load the course, as we are yet just loggin' in and also might want course list
+	curl $meter $cert -u $user:$pass -c kurki-cookies -d "course=$course" $site > kurki-login
+
+	# return 1 for failed authorization
+	grep -q "401 Authorization Required" kurki-login
+	return $((! $?))
+}
+
+# kurki_get_courses 'KURKI initial page after login'
+# : get and print all courses (for logged-in user) from KURKI
+kurki_get_courses() {
+	# TODO: iconv needed so that courses with åäö work; should this be always done after curl?
+	# TODO2: if a course is already selected (above in login), that one is not grep'd because of "selected" :)
+	# TODO3: the grep-tr-paste post-process is almost out of control!
+	iconv -f iso-8859-1 $1 | grep -o '<option value=".*">.*</option>' | egrep -o '".*"|>.*<' | tr -d '<>"' | paste - - 	
+}
+
+# kurki_get_people
+# : get and sort all student numbers from KURKI
+kurki_get_people() {
+	# get all the people from KURKI (and prepare for adding missing people)
+	curl $meter $cert -u $user:$pass -b kurki-cookies -d "service=2participants&idtype=0&doSearch=0" $site > kurki-get-people
+	# NOTE: we're assuming there's <tt>'s only for student numbers!
+	egrep -o '<tt>[0-9]+</tt>' kurki-get-people | tr -d '<t/>' | sort
+}
+
+# kurki_people_missing 'KURKI sorted people' 'sorted input'
+# : list people that are in input but are missing from KURKI
+# TODO: make somehow show names for poor people!
+kurki_people_missing() {
+	# join inputs on student number
+	# NOTE: not bothering with \t separators here, as the extra fields aren't needed
+	# TODO: should we zap points? what if there's a name field after points?
+	join -v 2 $1 $2
+}
+
+# kurki_add_people 'missing student numbers'
+# : add all students (number) from input into KURKI
+# NOTE: must already be in '2participants', as we are after kurki_get_people
+kurki_add_people() {
+	# NOTE: we're ignoring anything after the student number, such as points
+	# note also that read uses $IFS as input field separator, which by default is " \t\n"
+	while read op crap
+	do
+		echo -n $op...
+		kurki_add_person $op && echo OK || echo FAIL
+	done < $1
+}
+
+# add one student (number) into KURKI
+kurki_add_person() {
+	# NOTE: must already be in '2participants'! (doSearch=2 would get student once removed from course)
+	curl -s $cert -u $user:$pass -b kurki-cookies -d "idtype=0&idvalue=$1&doSearch=1" $site > kurki-add-person
+
+	# another crappy thing! (TS would be same for all students in the list; we have only one though)
+	ts=$(grep TS kurki-add-person | egrep -o '"[0-9]+"' | tr -d \")
+	# add to group 99 if it exists, otherwise group 1
+	grep -q '<option>99' kurki-add-person && group=99 || group=1
+	
+	# echo person name too (as we're kind of getting it for free here)
+	# TODO: shouldn't uglishly echo in here but instead return upstream
+	egrep 'mailto:' kurki-add-person | grep -v tktl-kurki | grep -o '">[^<]*</' | tr -d '"></\n'
+	echo -n ...
+	
+	# ATTEMPT to insert student into KURKI!
+
+	# NOTE: there's hidden ssn and doAdd parameters in KURKI dump, we're ignoring them as they should match $1
+	curl -s $cert -u $user:$pass -b kurki-cookies -d "group=$group&TS=$ts&ssn=$1&doAdd=$1" $site > kurki-add-person
+
+	# check for success! return 0 for success!
+	grep -q 'tty kurssille' kurki-add-person
+}
+
+# prepare KURKI for grade entry
+# must be called before kurki_get_points_for and friends!
+# kurki_prepare_entry 'KURKI point type number'
+kurki_prepare_entry() {
+	# TODO: could we somehow prepare AND get people at the same time?
+	#       works for '2participants' but not '1entry' :/
+	curl $meter $cert -u $user:$pass -b kurki-cookies -d "service=1entry&ptype=$1" $site
+}
+
+# kurki_get_points_for 'KURKI point type' 'KURKI offering number'
+# : get and sort student number and points field name from KURKI
+kurki_get_points_for() {
+	# NOTE: we need to 'load' the current offering as KURKI's state,
+	#       since we can't specify the offering when POST'ing :o
+	curl $meter $cert -u $user:$pass -b kurki-cookies -d "ptype=$1&offering=$2&filter=" $site > kurki-get-points
+
+	# (the first egrep is optional and is just assuring things)
+	# WARNING: we'll assume that the point fields' name starts with 't'
+	# TODO: could be a bit more robust and safe...
+	egrep 'mailto:|type="text"' kurki-get-points | \
+	egrep -o '\([0-9]+\)|"t[0-9]+"' | tr -d '()"' | paste - - | sort
+}
+
+# kurki_join_grades 'KURKI sorted points' 'sorted input'
+kurki_join_grades() {
+	# WARNING: make sure both to-be-joined files are sorted by student number
+	# NOTE: people who are not in input-sort won't get any points;
+	#       not even empty, so if they had any points in KURKI, those remain
+	join -t $'\t' $1 $2
+}
+
+# builds your KURKI post string for {one assignment} x {all the people}
+# kurki_build_post 'joined KURKI grades' 'KURKI offering number'
+kurki_build_post() {
+	# convert into a form POST string
+	# WARNING: any extra spaces will cause trouble!
+	cut -f 2,$(($2+3)) $1 | tr "\t\n" "=&"
+	echo -n commit=ok
+}
+
+# kurki_send_post 'KURKI post string'
+kurki_send_post() {
+	# TODO: should we use $meter progress bar here too?
+	curl -# $cert -u $user:$pass -b kurki-cookies -d @$1 $site
+}
+
+
+# ******************** BEGIN MAIN! ********************
+
+[ -z "$1" ] && helpme
+
+# sets environment variables accordingly
+parse_args $*
+echo INFO: user $user / course $course / ptype $ptype
+
+[ -z "$input" -a -z "$do_nothing" ] && {
+	echo "INFO: no input or -n given, will now exit."
+	exit 1
+}
+
+# make temp dir, copy input there and cd in
+[ ! -d $tmp ] && mkdir $tmp
+[ "$input" ] && cp $input $tmp/input
+pushd $tmp > /dev/null
+
+# NOTE: input will be re-read $offeringscount times after this!
+# let's skip input validation if no input is given (just listing courses?)
+[ "$input" ] && {
+	parse_input input input-sort
+
+	echo "INFO: detected {$offeringscount assignments} x {$peoplecount people} in $input."
+	((offeringscount <= 0 || peoplecount <= 0)) && {
+		echo "ERROR: zero or negative number of assignments/people!"
+		exit 1
+	}
+}
+
+# attempt KUKRI login
+kurki_login || {
+	echo "OOPS! KURKI authorization failed :( :("
+	exit 403
+}
+
+# list courses if not specified
+[ $course ] || {
+	echo "INFO: -c course not specified, pick your course..."
+	kurki_get_courses kurki-login
+	exit 0
+}
+
+# CHECK for missing people...
+kurki_get_people > kurki-people-sort
+kurki_people_missing kurki-people-sort input-sort > kurki-people-missing
+# COUNT how many is missing
+missing=$(wc -l < kurki-people-missing)
+[ $missing == 0 ] || {
+	echo "NOTE: $missing people in input are missing from KURKI."
+	# add if requested with -a
+	[ $do_add ] && {
+		echo "INFO: will now add them to KURKI..."
+		kurki_add_people kurki-people-missing
+	} || echo "INFO: won't add them to KURKI (use -a to add them)"
+}
+
+# TODO: move to appropriate place!
+[ $do_nothing ] && {
+	echo "INFO: -n specified, will now quit."
+	exit 0
+}
+
+echo "INFO: will now begin posting points into KURKI..."
+# TODO: check if there's enough assignments (offerings) in KURKI
+kurki_prepare_entry $ptype > /dev/null
+
+# *** loop all the offerings/assignments ***
+# NOTE: KURKI starts offerings from 0, so we'll do it that way too
+for ((offering = 0; offering < offeringscount; offering++))
+do
+	# NOTE: need to set KURKI offering state by re-getting all the people!
+	kurki_get_points_for $ptype $offering > kurki-points-sort
+
+	# NOTE: kurki-points-sort, and alas, kurki-grades is never supposed to change,
+	# but as we need to set KURKI offering' state anyway, let's just play super-safe
+	kurki_join_grades kurki-points-sort input-sort > kurki-grades
+	
+	echo "BUILDIN' your post request ($((offering+1))/$offeringscount)"
+	kurki_build_post kurki-grades $offering > kurki-post-$offering
+
+	echo "SENDIN' your post ($((offering+1))/$offeringscount)"
+	kurki_send_post kurki-post-$offering > kurki-post-$offering.html
+done
+
+# FINALIZE by checking if people are still missing!
+# NOTE: it'll now show last offering round's missing people
+kurki_people_missing kurki-points-sort input-sort > kurki-people-missing
+missing=$(wc -l < kurki-people-missing)
+[ $missing == 0 ] || {
+	echo "WARNING: following input people were missing from KURKI..."
+	cat kurki-people-missing
+}
+
+popd > /dev/null
+echo "DONE, check $tmp for debug!"
+# exit 0
