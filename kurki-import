@@ -13,6 +13,7 @@
 # 23.3.2009 / now also dos-esque \r\n newlines are mostly recognized
 # 17.11.2009 / course listing if no -c course given
 # 25.10.2010 / added missing ptype for kurki_prepare_entry
+# 9.11.2010 / fixed kurki_get_points_for for frozen students
 
 # 0 assignment/laskuharjoituspisteet
 # 1 project/harjoitustyö
@@ -201,10 +202,12 @@ kurki_get_points_for() {
 	curl $meter $cert -u $user:$pass -b kurki-cookies -d "ptype=$1&offering=$2&filter=" $site > kurki-get-points
 
 	# (the first egrep is optional and is just assuring things)
-	# WARNING: we'll assume that the point fields' name starts with 't'
-	# TODO: could be a bit more robust and safe...
-	egrep 'mailto:|type="text"' kurki-get-points | \
-	egrep -o '\([0-9]+\)|"t[0-9]+"' | tr -d '()"' | paste - - | sort
+	# WARNING: we'll assume that the point fields' name starts with 't',
+	# AND that either 'tXX' or 'kurkijaassa', but NOT both, is found for each student id
+	# TODO: so, this could be a bit more robust and safe...
+	# TODO: also of interest is, could the points be posted even for frozen students
+	egrep 'mailto:|type="text"|kurkijaassa' kurki-get-points | \
+	egrep -o '\([0-9]+\)|"t[0-9]+"|jaassa' | tr -d '()"' | paste - - | sort
 }
 
 # kurki_join_grades 'KURKI sorted points' 'sorted input'
