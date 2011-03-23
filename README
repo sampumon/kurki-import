@@ -1,6 +1,6 @@
-HOWTO?
+KURKI-IMPORT HOWTO
 
-1) Organize your Google Doc as follows. Creating extra sheets is good. Nothing extra (except comments)!
+1) Organize your Google Doc as follows. Creating extra sheets is good. Nothing extra (except #comments). The first 0 (zero) in student number is optional.
 
 # assignment points (sheet 1)
 012345678	1	0	3	4
@@ -28,8 +28,8 @@ kurki-import -n
 kurki-import -c 512345.2010.S.K.1 -p 0 my-course-assignments.tsv
 kurki-import -c 512345.2010.S.K.1 -p 2 my-course-exams.tsv
 
-7) Check KURKI if everything is ok!
+7) Check KURKI if everything is ok
 
-Notice that having point 0 and (empty) is different for KURKI
-(and kurki-import), as 0 usually triggers "attended the course"
-status, and cause a FAIL for student! Beware!
+Notice that having point 0 (zero) and "" (empty) is different for KURKI (and kurki-import), as 0 triggers "attended the course" status, and cause a FAIL for student! Beware!
+
+8) Publish course results! Good luck.

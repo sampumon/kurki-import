@@ -2,7 +2,7 @@
 
 # Imports course points/gradings/whatnot into KURKI. Run without parameters for help.
 # Do check the results for sanity! Thanks.
-# Samuli / 2008 syksy – 2010 syksy
+# Samuli / 2008 syksy – 2011 kevät
 
 # There are some TODOs left, so be careful :)
 
@@ -14,6 +14,7 @@
 # 17.11.2009 / course listing if no -c course given
 # 25.10.2010 / added missing ptype for kurki_prepare_entry
 # 9.11.2010 / fixed kurki_get_points_for for frozen students
+# 23.3.2011 / supports end-of-line #comments, prepends 0 to student number if missing
 
 # 0 assignment/laskuharjoituspisteet
 # 1 project/harjoitustyö
@@ -46,6 +47,7 @@ Usage: kurki-import -aknv [-c course] [-p ptype] [-u user] INPUT
 	example with {three assignments} x {two students}:
 	011212122	8	5	3
 	012112121	10	5	4
+	# first 0 (zero) in student number is optional
 TAC
 exit 1
 }
@@ -88,12 +90,10 @@ parse_args () {
 # parse_input "raw input" "output file"
 # : parse and sort input file
 parse_input () {
-	# skip white-space-only and #comment lines
-	# TODO: does it hande _all_ cases? AT LEAST DOS \r!
-	# TODO2: needs dos2unix though! otherwise last point field is screwed
-	# (could be also grep, but did with awk first :o)
-	# NOTE: we're not bothering numeric sort; make sure student numbers are of same length!
-	awk '!/^[ \t#\r]/ { print }' $1 | sort > $2
+	# remove #comments, skip white-space-only lines, add 0 if missing from student number
+	# NOTE: sed requires raw TAB character
+	# TODO: not sure if dos-esque \r\n newlines work correctly with sed
+	sed -E 's/	?#.*//; /^[ 	]*$/d; s/^[^0]/0&/' $1 | sort -n > $2
 
 	# DETECT {grade count} x {people count} from parsed INPUT
 	# NOTE: empty fields don't count unless field separator is \t, and it sure is!
@@ -243,13 +243,17 @@ parse_args $*
 echo INFO: user $user / course $course / ptype $ptype
 
 [ -z "$input" -a -z "$do_nothing" ] && {
-	echo "INFO: no input or -n given, will now exit."
+	echo "INFO: no input or -n given, will now quit."
 	exit 1
 }
 
 # make temp dir, copy input there and cd in
 [ ! -d $tmp ] && mkdir $tmp
-[ "$input" ] && cp $input $tmp/input
+[ "$input" ] && cp $input $tmp/input || {
+	echo "ERROR: $input not found, will now quit."
+	exit 1
+}
+
 pushd $tmp > /dev/null
 
 # NOTE: input will be re-read $offeringscount times after this!
@@ -275,6 +279,12 @@ kurki_login || {
 	echo "INFO: -c course not specified, pick your course..."
 	kurki_get_courses kurki-login
 	exit 0
+}
+
+# TODO: move to appropriate place!
+[ "$input" ] || {
+	echo "INFO: no input, will now quit."
+	exit 1
 }
 
 # CHECK for missing people...
