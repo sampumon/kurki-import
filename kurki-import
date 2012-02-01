@@ -15,6 +15,8 @@
 # 25.10.2010 / added missing ptype for kurki_prepare_entry
 # 9.11.2010 / fixed kurki_get_points_for for frozen students
 # 23.3.2011 / supports end-of-line #comments, prepends 0 to student number if missing
+# 1.2.2012 / fixed awkward bug of course listing (kurki-import -n) not working, also
+#            a random "sort -n" bug causing erroneus input to fail matching people
 
 # 0 assignment/laskuharjoituspisteet
 # 1 project/harjoitustyö
@@ -50,6 +52,16 @@ Usage: kurki-import -aknv [-c course] [-p ptype] [-u user] INPUT
 	# first 0 (zero) in student number is optional
 TAC
 exit 1
+}
+
+# TODO: this is not used
+# quit [exit_code] [message]
+quit () {
+	exitcode=$1
+	shift
+
+	echo "$@" >&2
+	exit $exitcode
 }
 
 # parse command line arguments and set variables accordingly
@@ -93,7 +105,7 @@ parse_input () {
 	# remove #comments, skip white-space-only lines, add 0 if missing from student number
 	# NOTE: sed requires raw TAB character
 	# TODO: not sure if dos-esque \r\n newlines work correctly with sed
-	sed -E 's/	?#.*//; /^[ 	]*$/d; s/^[^0]/0&/' $1 | sort -n > $2
+	sed -E 's/	?#.*//; /^[ 	]*$/d; s/^[1-9]/0&/' $1 | sort > $2
 
 	# DETECT {grade count} x {people count} from parsed INPUT
 	# NOTE: empty fields don't count unless field separator is \t, and it sure is!
@@ -234,7 +246,7 @@ kurki_send_post() {
 }
 
 
-# ******************** BEGIN MAIN! ********************
+######################## BEGIN MAIN! ########################
 
 [ -z "$1" ] && helpme
 
@@ -247,11 +259,15 @@ echo INFO: user $user / course $course / ptype $ptype
 	exit 1
 }
 
-# make temp dir, copy input there and cd in
+# make temp dir if not yet there
 [ ! -d $tmp ] && mkdir $tmp
-[ "$input" ] && cp $input $tmp/input || {
-	echo "ERROR: $input not found, will now quit."
-	exit 1
+
+# copy input to temp dir and cd in
+[ "$input" ] && {
+	cp $input $tmp/input || {
+		echo "ERROR: $input not found, will now quit."
+		exit 1
+	}
 }
 
 pushd $tmp > /dev/null
