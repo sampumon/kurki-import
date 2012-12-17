@@ -251,7 +251,7 @@ kurki_send_post() {
 [ -z "$1" ] && helpme
 
 # sets environment variables accordingly
-parse_args $*
+parse_args "$@"
 echo INFO: user $user / course $course / ptype $ptype
 
 [ -z "$input" -a -z "$do_nothing" ] && {
@@ -264,7 +264,7 @@ echo INFO: user $user / course $course / ptype $ptype
 
 # copy input to temp dir and cd in
 [ "$input" ] && {
-	cp $input $tmp/input || {
+	cp "$input" "$tmp/input" || {
 		echo "ERROR: $input not found, will now quit."
 		exit 1
 	}
